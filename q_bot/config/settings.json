@@ -1,0 +1,36 @@
+{
+  "bot_settings": {
+    "symbol": "EURUSD",
+    "data_filepath": "q_bot/data/EURUSD_M1.csv"
+  },
+  "risk_management": {
+    "initial_balance": 10000,
+    "pnl_goal_pct": 2.0,
+    "drawdown_stop_pct": 1.0,
+    "max_trades_per_day": 20
+  },
+  "trade_management": {
+    "micro_tp_pips": 3,
+    "hard_sl_pips": 10,
+    "pause_duration_minutes": 10
+  },
+  "session_management": {
+    "timezone": "America/New_York",
+    "rollover_time": "17:00",
+    "trading_windows_utc": [
+      ["06:00", "09:00"],
+      ["12:00", "15:00"]
+    ]
+  },
+  "broker_settings": {
+    "rejection_rate": 0.01
+  },
+  "indicator_settings": {
+    "ema_lengths": [20, 50, 200],
+    "atr_length": 14,
+    "bbands_length": 20,
+    "rsi_length": 14,
+    "zscore_length": 20,
+    "adx_length": 14
+  }
+}

@@ -28,7 +28,8 @@
   "mt5_settings": {
     "account": 12345678,
     "password": "your_password",
-    "server": "Your_Server_Name"
+    "server": "Your_Server_Name",
+    "deviation": 20
   },
   "indicator_settings": {
     "ema_lengths": [20, 50, 200],

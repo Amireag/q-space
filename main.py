@@ -10,7 +10,7 @@ from q_bot.utils.time_utils import SessionManager
 from q_bot.utils.logger import setup_logging, log
 from q_bot.utils.config import load_config
 from q_bot.connectors.mt5_adapter import MT5Adapter
-from q_bot.ui.dashboard import Dashboard
+from q_bot.ui.web_server import WebServer
 from q_bot.ml.trainer import ModelTrainer
 
 def main():
@@ -31,38 +31,37 @@ def main():
     mt5_conf = config['mt5_settings']
 
     mt5_adapter = MT5Adapter(config=mt5_conf)
-    if not mt5_adapter.connect(): return
+    if not mt5_adapter.connect():
+        log.critical("Failed to connect to MetaTrader 5. Please ensure the terminal is running and credentials are correct.")
+        return
 
-    # 3. Perform Initial Data Backfill
-    # This runs once at the start to ensure we have data.
+    # 3. Perform Initial Data Backfill & Model Training
     data_logger = DataLogger(mt5_adapter, bot_conf['symbol'])
     data_logger.initial_backfill()
 
-    # 4. Perform Initial Model Training
-    # This runs once at the start to ensure we have models to trade with.
     model_trainer = ModelTrainer(config)
     model_trainer.train_all_models()
 
-    # 5. Initialize Live Components
+    # 4. Initialize Live Components
     data_handler = DataHandler(mt5_adapter, bot_conf['symbol'])
     broker = MT5Broker(mt5_adapter)
     session_manager = SessionManager(config=config['session_management'])
     risk_manager = RiskManager(initial_balance=config['risk_management']['initial_balance'])
     trade_manager = TradeManager(broker, risk_manager, session_manager, config['trade_management'])
     engine = TradingEngine(bot_conf['symbol'], data_handler, trade_manager, session_manager, config['indicator_settings'])
-    dashboard = Dashboard(risk_manager, broker, bot_conf['symbol'])
+    web_server = WebServer(risk_manager, broker, bot_conf['symbol'])
 
-    # 6. Start All Components in Background Threads
+    # 5. Start All Components in Background Threads
     log.info("Starting all components in background threads...")
 
-    # Create threads for each long-running process
-    engine_thread = threading.Thread(target=engine.run, name="TradingEngine")
-    dashboard_thread = threading.Thread(target=dashboard.run, name="Dashboard")
-    logger_thread = threading.Thread(target=data_logger.run_continuous_logging, name="DataLogger")
-    trainer_thread = threading.Thread(target=model_trainer.run_periodic_training, name="ModelTrainer")
+    web_server_thread = threading.Thread(target=web_server.run, name="WebServer", daemon=True)
+    threads = [
+        threading.Thread(target=engine.run, name="TradingEngine"),
+        threading.Thread(target=data_logger.run_continuous_logging, name="DataLogger"),
+        threading.Thread(target=model_trainer.run_periodic_training, name="ModelTrainer")
+    ]
 
-    threads = [engine_thread, dashboard_thread, logger_thread, trainer_thread]
-
+    web_server_thread.start()
     for t in threads:
         t.start()
 
@@ -72,19 +71,21 @@ def main():
             time.sleep(1)
     except KeyboardInterrupt:
         log.info("Caught KeyboardInterrupt. Stopping all components...")
+    finally:
+        # Signal all non-daemon threads to stop
         data_logger.stop()
         model_trainer.stop()
         engine.stop()
-        dashboard.stop()
+        web_server.stop()
 
-    # 7. Disconnect and Shutdown
-    for t in threads:
-        t.join() # Wait for all threads to finish
+        # Wait for all main threads to finish
+        for t in threads:
+            t.join()
 
-    mt5_adapter.disconnect()
-    log.info("=============================================")
-    log.info("           Q.BOT SHUTDOWN COMPLETE           ")
-    log.info("=============================================")
+        mt5_adapter.disconnect()
+        log.info("=============================================")
+        log.info("           Q.BOT SHUTDOWN COMPLETE           ")
+        log.info("=============================================")
 
 
 if __name__ == "__main__":

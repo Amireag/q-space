@@ -1,8 +1,10 @@
 import time
 import logging
+import os
 import pandas as pd
 import joblib
 from pathlib import Path
+from datetime import datetime, timezone
 from q_bot.data.handler import DataHandler
 from q_bot.indicators.technicals import IndicatorManager
 from q_bot.core.models import Signal
@@ -14,7 +16,8 @@ MODEL_DIR = Path("q_bot/ml/models")
 
 class TradingEngine:
     """
-    The core trading engine, driven by a multi-model, grouped voting system.
+    The core trading engine, driven by a multi-model, grouped voting system
+    with dynamic model reloading.
     """
     TIME_FRAME_GROUPS = {
         'Short': ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M10'],
@@ -30,20 +33,28 @@ class TradingEngine:
         self.indicator_config = indicator_config
         self.running = False
         self.models = {}
+        self.model_timestamps = {}
+        self.last_model_check = 0
 
-    def _load_models(self):
-        """Loads all available trained models."""
-        log.info("Loading all trained models...")
+    def _load_models(self, force_reload=False):
+        """Loads or reloads all available trained models."""
+        if not force_reload: log.info("Loading all trained models...")
+
         all_timeframes = [tf for group in self.TIME_FRAME_GROUPS.values() for tf in group]
         for tf in all_timeframes:
             model_path = MODEL_DIR / f"model_{tf}.joblib"
             if model_path.exists():
                 try:
+                    current_mtime = os.path.getmtime(model_path)
+                    if force_reload and tf in self.models and self.model_timestamps.get(tf) == current_mtime:
+                        continue # Skip if model hasn't changed
+
                     self.models[tf] = joblib.load(model_path)
-                    log.info(f"Loaded model for {tf}.")
+                    self.model_timestamps[tf] = current_mtime
+                    log.info(f"{'Reloaded' if force_reload else 'Loaded'} model for {tf}.")
                 except Exception as e:
                     log.error(f"Error loading model for {tf}: {e}")
-            else:
+            elif not force_reload:
                 log.warning(f"Model for {tf} not found. It will be skipped.")
 
         if not self.models:
@@ -56,6 +67,11 @@ class TradingEngine:
         self.running = True
         log.info("Trading engine started in ML-Voting mode.")
         while self.running:
+            # Check for new models every 60 seconds
+            if time.time() - self.last_model_check > 60:
+                self._load_models(force_reload=True)
+                self.last_model_check = time.time()
+
             self.on_tick()
             time.sleep(5)
         log.info("Trading engine stopped.")
@@ -64,13 +80,12 @@ class TradingEngine:
         self.running = False
 
     def _get_group_vote(self, group_name: str, timeframes: list) -> str:
-        """Gets the majority vote for a given model group."""
         votes = []
         for tf in timeframes:
             if tf not in self.models: continue
 
             data = self.data_handler.get_resampled_data(tf)
-            if data is None or len(data) < self.indicator_config.get('zscore_length', 20): continue
+            if data is None or len(data) < 20: continue
 
             features_df = IndicatorManager(data, self.indicator_config).add_all_indicators()
             latest_features = features_df.iloc[-1]
@@ -81,8 +96,6 @@ class TradingEngine:
             votes.append('LONG' if prediction == 1 else 'SHORT')
 
         if not votes: return 'HOLD'
-
-        # Return the majority vote
         return max(set(votes), key=votes.count)
 
     def on_tick(self):
@@ -94,14 +107,12 @@ class TradingEngine:
 
         log.info("New tick. Getting votes from model groups...")
 
-        # Get vote from each group
         short_vote = self._get_group_vote('Short', self.TIME_FRAME_GROUPS['Short'])
         mid_vote = self._get_group_vote('Mid', self.TIME_FRAME_GROUPS['Mid'])
         long_vote = self._get_group_vote('Long', self.TIME_FRAME_GROUPS['Long'])
 
         log.info(f"Votes: Short={short_vote}, Mid={mid_vote}, Long={long_vote}")
 
-        # Check for consensus
         if short_vote == mid_vote == long_vote and short_vote != 'HOLD':
             direction = short_vote
             log.info(f"CONSENSUS REACHED: {direction}")

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Q.bot Status</title>
+    <style>
+        body { font-family: 'Courier New', Courier, monospace; background-color: #1a1a1a; color: #e6e6e6; padding: 20px; }
+        h1 { color: #4d94ff; }
+        .dashboard { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
+        .metric { background-color: #2c2c2c; padding: 15px; border-radius: 5px; }
+        .metric-title { font-weight: bold; color: #cccccc; }
+        .metric-value { font-size: 1.2em; color: #4d94ff; }
+    </style>
+</head>
+<body>
+    <h1>Q.bot Live Status</h1>
+    <p>Status at: <span id="timestamp">--:--:--</span></p>
+    <div class="dashboard">
+        <div class="metric">
+            <div class="metric-title">Symbol</div>
+            <div class="metric-value" id="symbol">--</div>
+        </div>
+        <div class="metric">
+            <div class="metric-title">Balance</div>
+            <div class="metric-value" id="balance">--</div>
+        </div>
+        <div class="metric">
+            <div class="metric-title">Open Trades</div>
+            <div class="metric-value" id="open_trades">--</div>
+        </div>
+        <div class="metric">
+            <div class="metric-title">Win Rate</div>
+            <div class="metric-value" id="win_rate">--</div>
+        </div>
+        <div class="metric">
+            <div class="metric-title">Loss Rate</div>
+            <div class="metric-value" id="loss_rate">--</div>
+        </div>
+        <div class="metric">
+            <div class="metric-title">Daily PnL</div>
+            <div class="metric-value" id="daily_pnl">--</div>
+        </div>
+        <div class="metric">
+            <div class="metric-title">Total PnL</div>
+            <div class="metric-value" id="total_pnl">--</div>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', (event) => {
+            // Connect to the Socket.IO server.
+            // The 'transports' option is important for some environments.
+            const socket = io({ transports: ['websocket'] });
+
+            socket.on('connect', () => {
+                console.log('Connected to the server!');
+            });
+
+            // Listen for the 'status_update' event
+            socket.on('status_update', (data) => {
+                console.log('Received status update:', data);
+                // Update the HTML elements with the new data
+                document.getElementById('timestamp').textContent = data.timestamp;
+                document.getElementById('symbol').textContent = data.symbol;
+                document.getElementById('balance').textContent = data.balance;
+                document.getElementById('open_trades').textContent = data.open_trades;
+                document.getElementById('win_rate').textContent = data.win_rate;
+                document.getElementById('loss_rate').textContent = data.loss_rate;
+                document.getElementById('daily_pnl').textContent = data.daily_pnl;
+                document.getElementById('total_pnl').textContent = data.total_pnl;
+            });
+
+            socket.on('disconnect', () => {
+                console.log('Disconnected from the server.');
+            });
+        });
+    </script>
+</body>
+</html>

@@ -14,3 +14,5 @@ finta
 MetaTrader5
 scikit-learn
 joblib
+Flask
+Flask-SocketIO

@@ -1,5 +1,5 @@
 import logging
-from datetime import time, datetime, timedelta
+from datetime import time, datetime, timedelta, timezone
 
 log = logging.getLogger('Q.bot')
 
@@ -16,7 +16,7 @@ class SessionManager:
 
     def _get_current_time_utc(self):
         """Returns the current time in UTC."""
-        return datetime.utcnow()
+        return datetime.now(timezone.utc)
 
     def is_trading_allowed(self):
         """

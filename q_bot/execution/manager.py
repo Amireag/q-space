@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from q_bot.core.models import Signal, Position
 from q_bot.execution.mt5_broker import MT5Broker
 from q_bot.risk.rules import RiskManager
@@ -24,7 +24,7 @@ class TradeManager:
         """
         Handles a new trading signal.
         """
-        if self.paused_until and datetime.utcnow() < self.paused_until:
+        if self.paused_until and datetime.now(timezone.utc) < self.paused_until:
             log.warning(f"Trade manager is paused until {self.paused_until}. Signal ignored.")
             return
 
@@ -34,7 +34,7 @@ class TradeManager:
                 position = self.broker.place_order(signal, sl_pips=self.hard_sl_pips, tp_pips=self.micro_tp_pips)
                 if position is None:
                     log.critical("Order rejected by broker. Pausing trade manager.")
-                    self.paused_until = datetime.utcnow() + self.pause_duration
+                    self.paused_until = datetime.now(timezone.utc) + self.pause_duration
         else:
             log.warning(f"Trade not allowed by RiskManager. Signal ignored: {signal}")
 

@@ -2,6 +2,7 @@ import time
 import logging
 import pandas as pd
 import joblib
+from pathlib import Path
 from q_bot.data.handler import DataHandler
 from q_bot.indicators.technicals import IndicatorManager
 from q_bot.core.models import Signal
@@ -9,12 +10,18 @@ from q_bot.execution.manager import TradeManager
 from q_bot.utils.time_utils import SessionManager
 
 log = logging.getLogger('Q.bot')
-MODEL_FILE = "q_bot_model.joblib"
+MODEL_DIR = Path("q_bot/ml/models")
 
 class TradingEngine:
     """
-    The core trading engine, now driven by a machine learning model.
+    The core trading engine, driven by a multi-model, grouped voting system.
     """
+    TIME_FRAME_GROUPS = {
+        'Short': ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M10'],
+        'Mid': ['M12', 'M15', 'M20', 'M30'],
+        'Long': ['H1']
+    }
+
     def __init__(self, symbol: str, data_handler: DataHandler, trade_manager: TradeManager, session_manager: SessionManager, indicator_config: dict):
         self.symbol = symbol
         self.data_handler = data_handler
@@ -22,88 +29,92 @@ class TradingEngine:
         self.session_manager = session_manager
         self.indicator_config = indicator_config
         self.running = False
-        self.model = self._load_model()
+        self.models = {}
 
-    def _load_model(self):
-        """Loads the trained machine learning model."""
-        try:
-            model = joblib.load(MODEL_FILE)
-            log.info(f"Successfully loaded model from {MODEL_FILE}")
-            return model
-        except FileNotFoundError:
-            log.critical(f"Model file not found at {MODEL_FILE}. Please run train_model.py first.")
-            return None
+    def _load_models(self):
+        """Loads all available trained models."""
+        log.info("Loading all trained models...")
+        all_timeframes = [tf for group in self.TIME_FRAME_GROUPS.values() for tf in group]
+        for tf in all_timeframes:
+            model_path = MODEL_DIR / f"model_{tf}.joblib"
+            if model_path.exists():
+                try:
+                    self.models[tf] = joblib.load(model_path)
+                    log.info(f"Loaded model for {tf}.")
+                except Exception as e:
+                    log.error(f"Error loading model for {tf}: {e}")
+            else:
+                log.warning(f"Model for {tf} not found. It will be skipped.")
+
+        if not self.models:
+            log.critical("No models were loaded. Trading engine cannot start.")
+            return False
+        return True
 
     def run(self):
-        """
-        Starts the trading engine's main loop.
-        """
-        if self.model is None:
-            log.critical("Cannot start TradingEngine: model not loaded.")
-            return
-
+        if not self._load_models(): return
         self.running = True
-        log.info("Trading engine started in ML mode.")
+        log.info("Trading engine started in ML-Voting mode.")
         while self.running:
             self.on_tick()
-            time.sleep(5) # Check every 5 seconds
+            time.sleep(5)
         log.info("Trading engine stopped.")
 
     def stop(self):
         self.running = False
 
+    def _get_group_vote(self, group_name: str, timeframes: list) -> str:
+        """Gets the majority vote for a given model group."""
+        votes = []
+        for tf in timeframes:
+            if tf not in self.models: continue
+
+            data = self.data_handler.get_resampled_data(tf)
+            if data is None or len(data) < self.indicator_config.get('zscore_length', 20): continue
+
+            features_df = IndicatorManager(data, self.indicator_config).add_all_indicators()
+            latest_features = features_df.iloc[-1]
+            if latest_features.isnull().any(): continue
+
+            features = latest_features.drop(['open', 'high', 'low', 'close', 'volume'])
+            prediction = self.models[tf].predict(features.values.reshape(1, -1))[0]
+            votes.append('LONG' if prediction == 1 else 'SHORT')
+
+        if not votes: return 'HOLD'
+
+        # Return the majority vote
+        return max(set(votes), key=votes.count)
+
     def on_tick(self):
-        """
-        Called on each tick of the engine.
-        Fetches data, calculates features, and makes a prediction.
-        """
         latest_price_data = self.data_handler.get_resampled_data('M1')
         if not latest_price_data.empty:
-            latest_price = latest_price_data.iloc[-1]['close']
-            self.trade_manager.monitor_positions(latest_price)
+            self.trade_manager.monitor_positions(latest_price_data.iloc[-1]['close'])
 
-        if not self.session_manager.is_trading_allowed():
-            return
+        if not self.session_manager.is_trading_allowed(): return
 
-        log.info("New tick. Getting data for prediction...")
-        # We trained the model on M5 data, so we need M5 data for prediction.
-        m5_data = self.data_handler.get_resampled_data('M5')
+        log.info("New tick. Getting votes from model groups...")
 
-        if m5_data is None or len(m5_data) < self.indicator_config.get('zscore_length', 20): # Check for enough data
-            log.warning("Not enough M5 data to generate features for prediction.")
-            return
+        # Get vote from each group
+        short_vote = self._get_group_vote('Short', self.TIME_FRAME_GROUPS['Short'])
+        mid_vote = self._get_group_vote('Mid', self.TIME_FRAME_GROUPS['Mid'])
+        long_vote = self._get_group_vote('Long', self.TIME_FRAME_GROUPS['Long'])
 
-        # 1. Feature Engineering
-        features_df = IndicatorManager(m5_data, self.indicator_config).add_all_indicators()
-        latest_features = features_df.iloc[-1]
+        log.info(f"Votes: Short={short_vote}, Mid={mid_vote}, Long={long_vote}")
 
-        # Check for NaN values in the latest features
-        if latest_features.isnull().any():
-            log.warning("Latest features contain NaN values. Skipping prediction.")
-            return
+        # Check for consensus
+        if short_vote == mid_vote == long_vote and short_vote != 'HOLD':
+            direction = short_vote
+            log.info(f"CONSENSUS REACHED: {direction}")
 
-        # 2. Make Prediction
-        # The model expects a 2D array, so we reshape the series.
-        features_for_prediction = latest_features.drop(['open', 'high', 'low', 'close', 'volume']).values.reshape(1, -1)
-        prediction = self.model.predict(features_for_prediction)[0]
-
-        # 3. Generate Signal
-        # 1 = BUY, 0 = SELL/HOLD. We will treat 0 as SELL for this implementation.
-        if prediction == 1:
-            direction = 'LONG'
+            signal = Signal(
+                symbol=self.symbol,
+                timestamp=datetime.now(timezone.utc),
+                signal_type='ML_VOTING',
+                direction=direction,
+                price=latest_price_data.iloc[-1]['close'],
+                confidence_score=99,
+                details={'votes': f'S:{short_vote}, M:{mid_vote}, L:{long_vote}'}
+            )
+            self.trade_manager.on_signal(signal)
         else:
-            direction = 'SHORT'
-
-        log.info(f"Model prediction: {direction}")
-
-        # For now, we'll trade on every signal. Confidence score can be added later.
-        signal = Signal(
-            symbol=self.symbol,
-            timestamp=latest_features.name,
-            signal_type='ML_PREDICTION',
-            direction=direction,
-            price=latest_features['close'],
-            confidence_score=99, # High confidence as it's from the model
-            details={'model_prediction': int(prediction)}
-        )
-        self.trade_manager.on_signal(signal)
+            log.info("No consensus. Holding.")

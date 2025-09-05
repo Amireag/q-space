@@ -1,7 +1,7 @@
 import time
 import logging
-import numpy as np
 import pandas as pd
+import joblib
 from q_bot.data.handler import DataHandler
 from q_bot.indicators.technicals import IndicatorManager
 from q_bot.core.models import Signal
@@ -9,10 +9,11 @@ from q_bot.execution.manager import TradeManager
 from q_bot.utils.time_utils import SessionManager
 
 log = logging.getLogger('Q.bot')
+MODEL_FILE = "q_bot_model.joblib"
 
 class TradingEngine:
     """
-    The core trading engine.
+    The core trading engine, now driven by a machine learning model.
     """
     def __init__(self, symbol: str, data_handler: DataHandler, trade_manager: TradeManager, session_manager: SessionManager, indicator_config: dict):
         self.symbol = symbol
@@ -21,120 +22,88 @@ class TradingEngine:
         self.session_manager = session_manager
         self.indicator_config = indicator_config
         self.running = False
+        self.model = self._load_model()
 
-    def _has_required_columns(self, df: pd.DataFrame, columns: list) -> bool:
-        """Checks if a dataframe has all the required columns."""
-        return all(col in df.columns for col in columns)
+    def _load_model(self):
+        """Loads the trained machine learning model."""
+        try:
+            model = joblib.load(MODEL_FILE)
+            log.info(f"Successfully loaded model from {MODEL_FILE}")
+            return model
+        except FileNotFoundError:
+            log.critical(f"Model file not found at {MODEL_FILE}. Please run train_model.py first.")
+            return None
 
     def run(self):
         """
         Starts the trading engine's main loop.
         """
+        if self.model is None:
+            log.critical("Cannot start TradingEngine: model not loaded.")
+            return
+
         self.running = True
-        log.info("Trading engine started.")
+        log.info("Trading engine started in ML mode.")
         while self.running:
             self.on_tick()
-            time.sleep(5)
+            time.sleep(5) # Check every 5 seconds
         log.info("Trading engine stopped.")
 
     def stop(self):
-        """
-        Stops the trading engine.
-        """
         self.running = False
 
     def on_tick(self):
         """
         Called on each tick of the engine.
+        Fetches data, calculates features, and makes a prediction.
         """
-        latest_m1_data = self.data_handler.get_resampled_data('M1')
-        if not latest_m1_data.empty:
-            latest_price = latest_m1_data.iloc[-1]['close']
+        latest_price_data = self.data_handler.get_resampled_data('M1')
+        if not latest_price_data.empty:
+            latest_price = latest_price_data.iloc[-1]['close']
             self.trade_manager.monitor_positions(latest_price)
 
         if not self.session_manager.is_trading_allowed():
             return
 
-        log.info("New tick. Checking for signals...")
-        try:
-            h1_data = IndicatorManager(self.data_handler.get_resampled_data('H1'), self.indicator_config).add_all_indicators()
-            m30_data = IndicatorManager(self.data_handler.get_resampled_data('M30'), self.indicator_config).add_all_indicators()
-            m10_data = IndicatorManager(self.data_handler.get_resampled_data('M10'), self.indicator_config).add_all_indicators()
-            m1_data = IndicatorManager(latest_m1_data, self.indicator_config).add_all_indicators()
-        except Exception as e:
-            log.error(f"Error getting data or indicators: {e}")
+        log.info("New tick. Getting data for prediction...")
+        # We trained the model on M5 data, so we need M5 data for prediction.
+        m5_data = self.data_handler.get_resampled_data('M5')
+
+        if m5_data is None or len(m5_data) < self.indicator_config.get('zscore_length', 20): # Check for enough data
+            log.warning("Not enough M5 data to generate features for prediction.")
             return
 
-        self.check_for_signals(h1_data, m30_data, m10_data, m1_data)
+        # 1. Feature Engineering
+        features_df = IndicatorManager(m5_data, self.indicator_config).add_all_indicators()
+        latest_features = features_df.iloc[-1]
 
-    def check_for_signals(self, h1_data, m30_data, m10_data, m1_data):
-        """
-        Checks for all types of signals.
-        """
-        self.check_trend_continuation(h1_data, m30_data, m10_data, m1_data)
-
-    def check_trend_continuation(self, h1_data, m30_data, m10_data, m1_data):
-        """
-        Checks for a trend continuation signal.
-        """
-        bias_cols = ['EMA_50', 'EMA_200', 'close']
-        if not (self._has_required_columns(h1_data, bias_cols) and self._has_required_columns(m30_data, bias_cols)):
+        # Check for NaN values in the latest features
+        if latest_features.isnull().any():
+            log.warning("Latest features contain NaN values. Skipping prediction.")
             return
 
-        latest_h1 = h1_data.iloc[-1]
-        latest_m30 = m30_data.iloc[-1]
+        # 2. Make Prediction
+        # The model expects a 2D array, so we reshape the series.
+        features_for_prediction = latest_features.drop(['open', 'high', 'low', 'close', 'volume']).values.reshape(1, -1)
+        prediction = self.model.predict(features_for_prediction)[0]
 
-        h1_bullish = latest_h1['EMA_50'] > latest_h1['EMA_200'] and latest_h1['close'] > latest_h1['EMA_200']
-        m30_bullish = latest_m30['EMA_50'] > latest_m30['EMA_200'] and latest_m30['close'] > latest_m30['EMA_200']
-        is_bullish_bias = h1_bullish and m30_bullish
+        # 3. Generate Signal
+        # 1 = BUY, 0 = SELL/HOLD. We will treat 0 as SELL for this implementation.
+        if prediction == 1:
+            direction = 'LONG'
+        else:
+            direction = 'SHORT'
 
-        h1_bearish = latest_h1['EMA_50'] < latest_h1['EMA_200'] and latest_h1['close'] < latest_h1['EMA_200']
-        m30_bearish = latest_m30['EMA_50'] < latest_m30['EMA_200'] and latest_m30['close'] < latest_m30['EMA_200']
-        is_bearish_bias = h1_bearish and m30_bearish
+        log.info(f"Model prediction: {direction}")
 
-        if not (is_bullish_bias or is_bearish_bias):
-            return
-        direction = 'LONG' if is_bullish_bias else 'SHORT'
-        log.info(f"Trend Bias Confirmed: {direction}")
-
-        setup_cols = [f"RSI_{self.indicator_config['rsi_length']}", 'EMA_20', 'low', 'high', 'close']
-        if not self._has_required_columns(m10_data, setup_cols):
-            return
-
-        latest_m10 = m10_data.iloc[-1]
-        rsi_in_zone = 45 <= latest_m10[f"RSI_{self.indicator_config['rsi_length']}"] <= 55
-        long_pullback = latest_m10['low'] < latest_m10['EMA_20'] and latest_m10['close'] > latest_m10['EMA_20']
-        short_pullback = latest_m10['high'] > latest_m10['EMA_20'] and latest_m10['close'] < latest_m10['EMA_20']
-
-        if not ((is_bullish_bias and rsi_in_zone and long_pullback) or \
-                (is_bearish_bias and rsi_in_zone and short_pullback)):
-            return
-        log.info(f"Setup Confirmed on M10: {direction}")
-
-        trigger_cols = ['MACD_HIST']
-        if not self._has_required_columns(m1_data, trigger_cols) or len(m1_data) < 2:
-            return
-
-        latest_m1 = m1_data.iloc[-1]
-        prev_m1 = m1_data.iloc[-2]
-
-        long_trigger = is_bullish_bias and latest_m1['MACD_HIST'] > 0 and prev_m1['MACD_HIST'] <= 0
-        short_trigger = is_bearish_bias and latest_m1['MACD_HIST'] < 0 and prev_m1['MACD_HIST'] >= 0
-
-        if long_trigger or short_trigger:
-            log.info(f"TRIGGER FIRED: {direction}")
-            score = self.calculate_confidence_score(latest_h1, latest_m30)
-            if score >= 65:
-                signal = Signal(
-                    symbol=self.symbol, timestamp=latest_m1.name, signal_type='TREND_CONTINUATION',
-                    direction=direction, price=latest_m1['close'], confidence_score=score,
-                    details={'bias': f'H1 bullish: {h1_bullish}, M30 bullish: {m30_bullish}'}
-                )
-                self.trade_manager.on_signal(signal)
-
-    def calculate_confidence_score(self, latest_h1, latest_m30):
-        score = 0
-        if latest_h1['EMA_50'] > latest_h1['EMA_200']: score += 15
-        if latest_m30['EMA_50'] > latest_m30['EMA_200']: score += 15
-        score += 40 # Placeholder for other factors
-        return score
+        # For now, we'll trade on every signal. Confidence score can be added later.
+        signal = Signal(
+            symbol=self.symbol,
+            timestamp=latest_features.name,
+            signal_type='ML_PREDICTION',
+            direction=direction,
+            price=latest_features['close'],
+            confidence_score=99, # High confidence as it's from the model
+            details={'model_prediction': int(prediction)}
+        )
+        self.trade_manager.on_signal(signal)

@@ -62,10 +62,10 @@ All bot parameters can be tuned in the `q_bot/config/settings.json` file. This i
 
 ## How to Run
 
-To run the bot, execute the `main.py` module from the root directory of the project:
+To run the bot, execute the `main.py` script from the root directory of the project:
 
 ```sh
-python -m q_bot.main
+python main.py
 ```
 
 The bot will start running, and you will see its activity logged to the console and to the `q_bot.log` file. To stop the bot, press `Ctrl+C`.

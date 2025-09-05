@@ -21,7 +21,7 @@ def main():
 
     # 1. Load Configuration
     log.info("Loading configuration...")
-    config = load_config()
+    config = load_config('q_bot/config/settings.json') # Adjusted path for root execution
     if not config:
         log.critical("Could not load configuration. Exiting.")
         return

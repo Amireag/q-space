@@ -123,6 +123,11 @@ class MT5Adapter:
         positions = mt5.positions_get(magic=self.magic_number)
         return list(positions) if positions else []
 
+    def get_account_info(self):
+        """Fetches the current account information (balance, equity, etc.)."""
+        if not self.connected: return None
+        return mt5.account_info()
+
     def close_position(self, position_id: int):
         # ... (existing close_position logic remains the same)
         if not self.connected: return False

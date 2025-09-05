@@ -1,22 +1,22 @@
 import logging
 from datetime import datetime
+from q_bot.connectors.mt5_adapter import MT5Adapter
 
 log = logging.getLogger('Q.bot')
 
 class RiskManager:
     """
-    Manages trading risk based on a set of rules and tracks performance statistics.
+    Manages trading risk and provides live performance statistics from the broker.
     """
-    def __init__(self, initial_balance=10000, pnl_goal_pct=2.0, drawdown_stop_pct=1.0, max_trades_per_day=20):
-        self.initial_balance = initial_balance
-        self.session_start_balance = initial_balance
+    def __init__(self, mt5_adapter: MT5Adapter, initial_balance=10000, pnl_goal_pct=2.0, drawdown_stop_pct=1.0, max_trades_per_day=20):
+        self.adapter = mt5_adapter
+        self.initial_balance = initial_balance # Used for daily PnL % calculations
         self.pnl_goal_pct = pnl_goal_pct
         self.drawdown_stop_pct = drawdown_stop_pct
         self.max_trades_per_day = max_trades_per_day
 
-        self.current_balance = initial_balance
-        self.today = datetime.utcnow().date()
-        self.daily_pnl = 0.0
+        # Internal state for tracking trades managed by the bot
+        self.today = datetime.now().date()
         self.trades_today = 0
         self.wins_today = 0
         self.losses_today = 0
@@ -24,37 +24,42 @@ class RiskManager:
 
     def _reset_daily_stats(self):
         """
-        Resets the daily statistics if a new day has started.
+        Resets the daily trade-count statistics if a new day has started.
         """
-        current_date = datetime.utcnow().date()
+        current_date = datetime.now().date()
         if self.today != current_date:
             self.today = current_date
-            self.daily_pnl = 0.0
             self.trades_today = 0
             self.wins_today = 0
             self.losses_today = 0
             self.trading_halted = False
-            self.initial_balance = self.current_balance
+            # Update the initial balance for the new day based on the previous day's close
+            account_info = self.adapter.get_account_info()
+            if account_info:
+                self.initial_balance = account_info.balance
             log.info(f"New day. Daily stats reset. New initial balance: {self.initial_balance:.2f}")
 
     def is_trade_allowed(self) -> bool:
-        """
-        Checks if a new trade is allowed based on the risk rules.
-        """
         self._reset_daily_stats()
+        account_info = self.adapter.get_account_info()
+        if not account_info:
+            log.error("Could not get account info. Trading disallowed.")
+            return False
+
+        daily_pnl = account_info.profit
 
         if self.trading_halted:
             log.warning("Trading is halted for the day.")
             return False
 
         daily_loss_limit = - (self.drawdown_stop_pct / 100) * self.initial_balance
-        if self.daily_pnl <= daily_loss_limit:
+        if daily_pnl <= daily_loss_limit:
             log.critical(f"Daily loss limit of {daily_loss_limit:.2f} reached. Halting trading.")
             self.trading_halted = True
             return False
 
         daily_profit_goal = (self.pnl_goal_pct / 100) * self.initial_balance
-        if self.daily_pnl >= daily_profit_goal:
+        if daily_pnl >= daily_profit_goal:
             log.critical(f"Daily profit goal of {daily_profit_goal:.2f} reached. Halting trading.")
             self.trading_halted = True
             return False
@@ -68,39 +73,35 @@ class RiskManager:
 
     def on_trade_closed(self, pnl: float):
         """
-        Updates the risk manager's state after a trade is closed.
-
-        :param pnl: The profit or loss of the closed trade.
+        Updates internal trade counters after a trade is closed.
+        Note: The primary PnL tracking is now done via live account info.
         """
         self._reset_daily_stats()
-        self.current_balance += pnl
-        self.daily_pnl += pnl
         self.trades_today += 1
         if pnl > 0:
             self.wins_today += 1
         elif pnl < 0:
             self.losses_today += 1
-        log.info(f"Trade closed. PnL: {pnl:.2f}, Daily PnL: {self.daily_pnl:.2f}, Trades today: {self.trades_today}")
+        log.info(f"Trade closed. Bot-managed trades today: {self.trades_today}")
 
     def get_stats(self) -> dict:
         """
-        Returns a dictionary of current performance statistics.
+        Returns a dictionary of LIVE performance statistics from the broker.
         """
+        account_info = self.adapter.get_account_info()
+        if not account_info:
+            return {
+                "win_rate": "N/A", "loss_rate": "N/A", "balance": "N/A",
+                "daily_pnl": "N/A", "total_pnl": "N/A"
+            }
+
         win_rate = (self.wins_today / self.trades_today) * 100 if self.trades_today > 0 else 0
         loss_rate = (self.losses_today / self.trades_today) * 100 if self.trades_today > 0 else 0
-        total_pnl = self.current_balance - self.session_start_balance
 
         return {
             "win_rate": f"{win_rate:.2f}%",
             "loss_rate": f"{loss_rate:.2f}%",
-            "balance": f"{self.current_balance:.2f}",
-            "daily_pnl": f"{self.daily_pnl:.2f}",
-            "total_pnl": f"{total_pnl:.2f}"
+            "balance": f"{account_info.balance:.2f}",
+            "daily_pnl": f"{account_info.profit:.2f}",
+            "total_pnl": f"{account_info.equity - self.initial_balance:.2f}"
         }
-
-    def get_position_size(self) -> float:
-        """
-        Calculates the position size for a new trade.
-        (Simplified version)
-        """
-        return 0.1

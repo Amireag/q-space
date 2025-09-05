@@ -28,6 +28,9 @@ def main():
 
     # 2. Initialize Components
     bot_conf = config['bot_settings']
+    risk_conf = config['risk_management']
+    trade_conf = config['trade_management']
+    session_conf = config['session_management']
     mt5_conf = config['mt5_settings']
 
     mt5_adapter = MT5Adapter(config=mt5_conf)
@@ -45,9 +48,15 @@ def main():
     # 4. Initialize Live Components
     data_handler = DataHandler(mt5_adapter, bot_conf['symbol'])
     broker = MT5Broker(mt5_adapter)
-    session_manager = SessionManager(config=config['session_management'])
-    risk_manager = RiskManager(initial_balance=config['risk_management']['initial_balance'])
-    trade_manager = TradeManager(broker, risk_manager, session_manager, config['trade_management'])
+    session_manager = SessionManager(config=session_conf)
+    risk_manager = RiskManager(
+        mt5_adapter=mt5_adapter,
+        initial_balance=risk_conf['initial_balance'],
+        pnl_goal_pct=risk_conf['pnl_goal_pct'],
+        drawdown_stop_pct=risk_conf['drawdown_stop_pct'],
+        max_trades_per_day=risk_conf['max_trades_per_day']
+    )
+    trade_manager = TradeManager(broker, risk_manager, session_manager, trade_conf)
     engine = TradingEngine(bot_conf['symbol'], data_handler, trade_manager, session_manager, config['indicator_settings'])
     web_server = WebServer(risk_manager, broker, bot_conf['symbol'])
 

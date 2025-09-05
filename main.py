@@ -2,12 +2,14 @@ import threading
 import time
 from q_bot.data.handler import DataHandler
 from q_bot.core.engine import TradingEngine
-from q_bot.execution.broker import MockBroker
+from q_bot.execution.mt5_broker import MT5Broker
 from q_bot.execution.manager import TradeManager
 from q_bot.risk.rules import RiskManager
 from q_bot.utils.time_utils import SessionManager
 from q_bot.utils.logger import setup_logging, log
 from q_bot.utils.config import load_config
+from q_bot.connectors.mt5_adapter import MT5Adapter
+from q_bot.ui.dashboard import Dashboard
 
 def main():
     """
@@ -16,59 +18,53 @@ def main():
     setup_logging()
 
     log.info("=============================================")
-    log.info("           STARTING Q.BOT                    ")
+    log.info("           STARTING Q.BOT (Live Mode)        ")
     log.info("=============================================")
 
     # 1. Load Configuration
-    log.info("Loading configuration...")
-    config = load_config('q_bot/config/settings.json') # Adjusted path for root execution
+    config = load_config('q_bot/config/settings.json')
     if not config:
         log.critical("Could not load configuration. Exiting.")
         return
 
-    # 2. Initialize components with config
-    log.info("Initializing components from config...")
+    # 2. Initialize components
     bot_conf = config['bot_settings']
     risk_conf = config['risk_management']
     trade_conf = config['trade_management']
     session_conf = config['session_management']
-    broker_conf = config['broker_settings']
+    mt5_conf = config['mt5_settings']
 
-    data_handler = DataHandler(csv_filepath=bot_conf['data_filepath'], symbol=bot_conf['symbol'])
-    broker = MockBroker(rejection_rate=broker_conf['rejection_rate'])
+    mt5_adapter = MT5Adapter(config=mt5_conf)
+    if not mt5_adapter.connect():
+        log.critical("Failed to connect to MetaTrader 5.")
+        return
+
+    data_handler = DataHandler(mt5_adapter=mt5_adapter, symbol=bot_conf['symbol'])
+    broker = MT5Broker(mt5_adapter=mt5_adapter)
     session_manager = SessionManager(config=session_conf)
-    risk_manager = RiskManager(
-        initial_balance=risk_conf['initial_balance'],
-        pnl_goal_pct=risk_conf['pnl_goal_pct'],
-        drawdown_stop_pct=risk_conf['drawdown_stop_pct'],
-        max_trades_per_day=risk_conf['max_trades_per_day']
-    )
-    trade_manager = TradeManager(
-        broker=broker,
-        risk_manager=risk_manager,
-        session_manager=session_manager,
-        config=trade_conf
-    )
-    engine = TradingEngine(
-        symbol=bot_conf['symbol'],
-        data_handler=data_handler,
-        trade_manager=trade_manager,
-        session_manager=session_manager,
-        indicator_config=config['indicator_settings']
-    )
+    risk_manager = RiskManager(initial_balance=risk_conf['initial_balance'])
+    trade_manager = TradeManager(broker, risk_manager, session_manager, trade_conf)
+    engine = TradingEngine(bot_conf['symbol'], data_handler, trade_manager, session_manager, config['indicator_settings'])
 
-    # 3. Run the engine
-    log.info("Starting trading engine...")
+    # --- Initialize Dashboard ---
+    dashboard = Dashboard(risk_manager, broker, bot_conf['symbol'])
+
+    # 3. Run components in threads
+    log.info("Starting components in background threads...")
     engine_thread = threading.Thread(target=engine.run)
+    dashboard.start() # The dashboard's start method handles its own thread
     engine_thread.start()
 
     try:
         while engine_thread.is_alive():
             time.sleep(1)
     except KeyboardInterrupt:
-        log.info("Caught KeyboardInterrupt. Stopping engine...")
+        log.info("Caught KeyboardInterrupt. Stopping all components...")
         engine.stop()
+        dashboard.stop()
 
+    # 4. Disconnect and shutdown
+    mt5_adapter.disconnect()
     engine_thread.join()
     log.info("=============================================")
     log.info("           Q.BOT SHUTDOWN COMPLETE           ")

@@ -1,82 +1,63 @@
+import logging
 import pandas as pd
+from q_bot.connectors.mt5_adapter import MT5Adapter
+
+log = logging.getLogger('Q.bot')
 
 class DataHandler:
     """
-    Handles loading, processing, and resampling of market data.
+    Handles fetching and resampling of market data from the MT5Adapter.
     """
     TIMEFRAME_MAP = {
-        'M1': '1min', 'M2': '2min', 'M3': '3min', 'M4': '4min', 'M5': '5min',
-        'M6': '6min', 'M10': '10min', 'M12': '12min', 'M15': '15min',
-        'M20': '20min', 'M30': '30min', 'H1': 'h'
+        'M1': 'M1', 'M2': 'M2', 'M3': 'M3', 'M4': 'M4', 'M5': 'M5',
+        'M6': 'M6', 'M10': 'M10', 'M12': 'M12', 'M15': 'M15',
+        'M20': 'M20', 'M30': 'M30', 'H1': 'H1'
     }
 
-    def __init__(self, csv_filepath, symbol):
+    # We need enough bars for the longest indicator (e.g., 200 EMA)
+    BARS_TO_FETCH = 300
+
+    def __init__(self, mt5_adapter: MT5Adapter, symbol: str):
         """
         Initializes the DataHandler.
 
-        :param csv_filepath: Path to the CSV file with M1 data.
+        :param mt5_adapter: An instance of the MT5Adapter.
         :param symbol: The symbol of the instrument (e.g., 'EURUSD').
         """
-        self.csv_filepath = csv_filepath
+        self.adapter = mt5_adapter
         self.symbol = symbol
-        self.m1_data = None
-        self._load_data()
 
-    def _load_data(self):
+    def get_resampled_data(self, timeframe_str: str) -> pd.DataFrame:
         """
-        Loads the M1 data from the CSV file and sets the Timestamp as the index.
-        """
-        try:
-            self.m1_data = pd.read_csv(self.csv_filepath)
-            self.m1_data['Timestamp'] = pd.to_datetime(self.m1_data['Timestamp'])
-            self.m1_data.set_index('Timestamp', inplace=True)
-            # Rename columns to lowercase for pandas_ta compatibility
-            self.m1_data.rename(columns={
-                'Open': 'open',
-                'High': 'high',
-                'Low': 'low',
-                'Close': 'close',
-                'Volume': 'volume'
-            }, inplace=True)
-        except FileNotFoundError:
-            print(f"Error: Data file not found at {self.csv_filepath}")
-            self.m1_data = pd.DataFrame()
-
-    def get_resampled_data(self, timeframe_str):
-        """
-        Resamples the M1 data to the specified timeframe.
+        Gets historical data for the specified timeframe from the MT5 adapter.
+        Note: The MT5 adapter gets data for a specific timeframe directly,
+        so this method is now a pass-through and no longer does resampling.
 
         :param timeframe_str: The target timeframe (e.g., 'M5', 'H1').
-        :return: A pandas DataFrame with the resampled data.
+        :return: A pandas DataFrame with the data.
         """
-        if self.m1_data.empty:
+        if timeframe_str not in self.TIMEFRAME_MAP:
+            log.error(f"Unsupported timeframe: {timeframe_str}")
             return pd.DataFrame()
 
-        if timeframe_str not in self.TIMEFRAME_MAP:
-            raise ValueError(f"Timeframe '{timeframe_str}' is not supported.")
+        mt5_timeframe = self.TIMEFRAME_MAP[timeframe_str]
 
-        resample_rule = self.TIMEFRAME_MAP[timeframe_str]
+        log.debug(f"Fetching {self.BARS_TO_FETCH} bars for {self.symbol} on {mt5_timeframe} timeframe.")
 
-        ohlc = {
-            'open': 'first',
-            'high': 'max',
-            'low': 'min',
-            'close': 'last',
-            'volume': 'sum'
-        }
+        return self.adapter.get_rates(
+            symbol=self.symbol,
+            timeframe_str=mt5_timeframe,
+            num_bars=self.BARS_TO_FETCH
+        )
 
-        resampled_data = self.m1_data.resample(resample_rule).apply(ohlc)
-        resampled_data.dropna(inplace=True)
-        return resampled_data
-
-    def get_latest_bar(self, timeframe_str):
+    def get_latest_bar(self, timeframe_str: str):
         """
         Gets the latest available bar for a given timeframe.
 
-        :param timeframe_str: The timeframe to get the latest bar for (e.g., 'M5', 'H1').
-        :return: A pandas Series representing the latest bar.
+        :param timeframe_str: The timeframe to get the latest bar for.
+        :return: A pandas Series representing the latest bar, or None.
         """
-        if self.m1_data.empty:
+        data = self.get_resampled_data(timeframe_str)
+        if data.empty:
             return None
-
-        return self.get_resampled_data(timeframe_str).iloc[-1]
+        return data.iloc[-1]

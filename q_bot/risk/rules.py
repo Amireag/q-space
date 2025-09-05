@@ -5,10 +5,11 @@ log = logging.getLogger('Q.bot')
 
 class RiskManager:
     """
-    Manages trading risk based on a set of rules.
+    Manages trading risk based on a set of rules and tracks performance statistics.
     """
     def __init__(self, initial_balance=10000, pnl_goal_pct=2.0, drawdown_stop_pct=1.0, max_trades_per_day=20):
         self.initial_balance = initial_balance
+        self.session_start_balance = initial_balance
         self.pnl_goal_pct = pnl_goal_pct
         self.drawdown_stop_pct = drawdown_stop_pct
         self.max_trades_per_day = max_trades_per_day
@@ -17,6 +18,8 @@ class RiskManager:
         self.today = datetime.utcnow().date()
         self.daily_pnl = 0.0
         self.trades_today = 0
+        self.wins_today = 0
+        self.losses_today = 0
         self.trading_halted = False
 
     def _reset_daily_stats(self):
@@ -28,6 +31,8 @@ class RiskManager:
             self.today = current_date
             self.daily_pnl = 0.0
             self.trades_today = 0
+            self.wins_today = 0
+            self.losses_today = 0
             self.trading_halted = False
             self.initial_balance = self.current_balance
             log.info(f"New day. Daily stats reset. New initial balance: {self.initial_balance:.2f}")
@@ -71,7 +76,27 @@ class RiskManager:
         self.current_balance += pnl
         self.daily_pnl += pnl
         self.trades_today += 1
+        if pnl > 0:
+            self.wins_today += 1
+        elif pnl < 0:
+            self.losses_today += 1
         log.info(f"Trade closed. PnL: {pnl:.2f}, Daily PnL: {self.daily_pnl:.2f}, Trades today: {self.trades_today}")
+
+    def get_stats(self) -> dict:
+        """
+        Returns a dictionary of current performance statistics.
+        """
+        win_rate = (self.wins_today / self.trades_today) * 100 if self.trades_today > 0 else 0
+        loss_rate = (self.losses_today / self.trades_today) * 100 if self.trades_today > 0 else 0
+        total_pnl = self.current_balance - self.session_start_balance
+
+        return {
+            "win_rate": f"{win_rate:.2f}%",
+            "loss_rate": f"{loss_rate:.2f}%",
+            "balance": f"{self.current_balance:.2f}",
+            "daily_pnl": f"{self.daily_pnl:.2f}",
+            "total_pnl": f"{total_pnl:.2f}"
+        }
 
     def get_position_size(self) -> float:
         """

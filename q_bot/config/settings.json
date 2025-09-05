@@ -25,6 +25,11 @@
   "broker_settings": {
     "rejection_rate": 0.01
   },
+  "mt5_settings": {
+    "account": 12345678,
+    "password": "your_password",
+    "server": "Your_Server_Name"
+  },
   "indicator_settings": {
     "ema_lengths": [20, 50, 200],
     "atr_length": 14,

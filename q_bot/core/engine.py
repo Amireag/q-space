@@ -97,12 +97,12 @@ class TradingEngine:
         direction = 'LONG' if is_bullish_bias else 'SHORT'
         log.info(f"Trend Bias Confirmed: {direction}")
 
-        setup_cols = ['RSI_14', 'EMA_20', 'low', 'high', 'close']
+        setup_cols = [f"RSI_{self.indicator_config['rsi_length']}", 'EMA_20', 'low', 'high', 'close']
         if not self._has_required_columns(m10_data, setup_cols):
             return
 
         latest_m10 = m10_data.iloc[-1]
-        rsi_in_zone = 45 <= latest_m10['RSI_14'] <= 55
+        rsi_in_zone = 45 <= latest_m10[f"RSI_{self.indicator_config['rsi_length']}"] <= 55
         long_pullback = latest_m10['low'] < latest_m10['EMA_20'] and latest_m10['close'] > latest_m10['EMA_20']
         short_pullback = latest_m10['high'] > latest_m10['EMA_20'] and latest_m10['close'] < latest_m10['EMA_20']
 
@@ -111,15 +111,15 @@ class TradingEngine:
             return
         log.info(f"Setup Confirmed on M10: {direction}")
 
-        trigger_cols = ['MACDh_12_26_9']
+        trigger_cols = ['MACD_HIST']
         if not self._has_required_columns(m1_data, trigger_cols) or len(m1_data) < 2:
             return
 
         latest_m1 = m1_data.iloc[-1]
         prev_m1 = m1_data.iloc[-2]
 
-        long_trigger = is_bullish_bias and latest_m1['MACDh_12_26_9'] > 0 and prev_m1['MACDh_12_26_9'] <= 0
-        short_trigger = is_bearish_bias and latest_m1['MACDh_12_26_9'] < 0 and prev_m1['MACDh_12_26_9'] >= 0
+        long_trigger = is_bullish_bias and latest_m1['MACD_HIST'] > 0 and prev_m1['MACD_HIST'] <= 0
+        short_trigger = is_bearish_bias and latest_m1['MACD_HIST'] < 0 and prev_m1['MACD_HIST'] >= 0
 
         if long_trigger or short_trigger:
             log.info(f"TRIGGER FIRED: {direction}")

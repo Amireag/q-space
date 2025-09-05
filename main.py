@@ -36,7 +36,7 @@ def main():
 
     mt5_adapter = MT5Adapter(config=mt5_conf)
     if not mt5_adapter.connect():
-        log.critical("Failed to connect to MetaTrader 5.")
+        log.critical("Failed to connect to MetaTrader 5. Please ensure the terminal is running and credentials are correct.")
         return
 
     data_handler = DataHandler(mt5_adapter=mt5_adapter, symbol=bot_conf['symbol'])
@@ -45,14 +45,12 @@ def main():
     risk_manager = RiskManager(initial_balance=risk_conf['initial_balance'])
     trade_manager = TradeManager(broker, risk_manager, session_manager, trade_conf)
     engine = TradingEngine(bot_conf['symbol'], data_handler, trade_manager, session_manager, config['indicator_settings'])
-
-    # --- Initialize Dashboard ---
     dashboard = Dashboard(risk_manager, broker, bot_conf['symbol'])
 
     # 3. Run components in threads
     log.info("Starting components in background threads...")
     engine_thread = threading.Thread(target=engine.run)
-    dashboard.start() # The dashboard's start method handles its own thread
+    dashboard.start()
     engine_thread.start()
 
     try:

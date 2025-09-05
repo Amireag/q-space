@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta
 from q_bot.core.models import Signal, Position
-from q_bot.execution.broker import MockBroker
+from q_bot.execution.mt5_broker import MT5Broker
 from q_bot.risk.rules import RiskManager
 from q_bot.utils.time_utils import SessionManager
 
@@ -11,7 +11,7 @@ class TradeManager:
     """
     Manages the execution of trades and positions.
     """
-    def __init__(self, broker: MockBroker, risk_manager: RiskManager, session_manager: SessionManager, config: dict):
+    def __init__(self, broker: MT5Broker, risk_manager: RiskManager, session_manager: SessionManager, config: dict):
         self.broker = broker
         self.risk_manager = risk_manager
         self.session_manager = session_manager
